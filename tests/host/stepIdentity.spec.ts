@@ -26,8 +26,8 @@ describe('identifiedMessages', () => {
     const broken = [
       { role: 'user', source: { kind: 'user' }, content: [] },
       { id: '', role: 'user' },
-      { id: null },
-      { id: 42 },
+      { id: null, role: 'user' },
+      { id: 42, role: 'user' },
     ]
     const fixed = identifiedMessages(broken)
     assert.ok(fixed !== undefined)
@@ -35,9 +35,14 @@ describe('identifiedMessages', () => {
     for (const [index, message] of fixed.entries()) {
       assert.match((message as { id: string }).id, /^dshctx-[0-9a-f-]{36}$/, `entry ${index} minted`)
     }
+    const strip = (message: unknown): Record<string, unknown> => {
+      const copy: Record<string, unknown> = { ...(message as object) }
+      delete copy.id
+      return copy
+    }
     assert.deepEqual(
-      fixed.map(message => ({ ...(message as object), id: undefined })),
-      broken.map(message => ({ ...(message as object), id: undefined })),
+      fixed.map(strip),
+      broken.map(strip),
       'every non-id field passes through',
     )
     const good = identified('keep')
@@ -52,6 +57,46 @@ describe('identifiedMessages', () => {
     assert.equal(fixedTail[0], tailGood)
     assert.equal(fixedTail[1], tailGood)
     assert.match((fixedTail[2] as { id: string }).id, /^dshctx-/)
+  })
+
+  test('a message without role is completed with role "user", preserving a real id or role', () => {
+    // The shape plugin-injected context actually arrives in: `additionalContexts`
+    // items are `UserMessage`s, so a producer that forgets `role` persists an
+    // event the harness then refuses at load: `session event at seq N message
+    // must have role "user"`.
+    const notice = {
+      content: [{ type: 'text', text: 'notice' }],
+      source: { kind: 'cli-discipline', form: 'notice', summary: 'first call: env' },
+    }
+    const fixed = identifiedMessages([notice])
+    assert.ok(fixed !== undefined)
+    assert.equal(fixed.length, 1)
+    assert.equal((fixed[0] as { role: string }).role, 'user')
+    assert.match((fixed[0] as { id: string }).id, /^dshctx-[0-9a-f-]{36}$/)
+    assert.deepEqual((fixed[0] as { content: unknown }).content, notice.content)
+    assert.deepEqual((fixed[0] as { source: unknown }).source, notice.source)
+    assert.equal((notice as { role?: unknown }).role, undefined, 'the input is not mutated')
+    assert.equal((notice as { id?: unknown }).id, undefined, 'the input is not mutated')
+
+    const pinned = { id: 'pinned-1', content: [], source: { kind: 'plugin' } }
+    const withId = identifiedMessages([pinned])
+    assert.ok(withId !== undefined)
+    assert.equal((withId[0] as { id: string }).id, 'pinned-1', 'a real id is preserved')
+    assert.equal((withId[0] as { role: string }).role, 'user')
+
+    const assistantish = { role: 'assistant', content: [], source: { kind: 'model' } }
+    const kept = identifiedMessages([assistantish])
+    assert.ok(kept !== undefined)
+    assert.equal((kept[0] as { role: string }).role, 'assistant', 'an explicit role is never overwritten')
+    assert.match((kept[0] as { id: string }).id, /^dshctx-/)
+
+    for (const empty of [{ id: null, role: null }, { role: '' }]) {
+      const out = identifiedMessages([empty])
+      assert.ok(out !== undefined)
+      const entry = out[0] as { id: string; role: string }
+      assert.match(entry.id, /^dshctx-/)
+      assert.equal(entry.role, 'user')
+    }
   })
 
   test('non-object entries stay verbatim (unfixable without inventing a container)', () => {

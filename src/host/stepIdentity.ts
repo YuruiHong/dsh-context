@@ -24,15 +24,39 @@ function lacksId(message: unknown): boolean {
   return typeof id !== 'string' || id === ''
 }
 
+function lacksRole(message: unknown): boolean {
+  if (typeof message !== 'object' || message === null) return false
+  const role = (message as { role?: unknown }).role
+  return typeof role !== 'string' || role === ''
+}
+
+function isUnidentified(message: unknown): boolean {
+  return lacksId(message) || lacksRole(message)
+}
+
+/**
+ * Complete a decision message that would otherwise persist in a shape the
+ * harness refuses to load: it needs a non-empty `id` and, once persisted as a
+ * `user/message` event, `role: 'user'`. Fields the producer already supplied —
+ * a real `id` or a real `role` — are preserved as-is.
+ */
+function completed(message: object): object {
+  const record = message as Record<string, unknown>
+  const next: Record<string, unknown> = { ...record }
+  if (typeof record.role !== 'string' || record.role === '') next.role = 'user'
+  if (typeof record.id !== 'string' || record.id === '') next.id = MINTED_ID_PREFIX + randomUUID()
+  return next
+}
+
 export function identifiedMessages(messages: readonly unknown[]): unknown[] | undefined {
   let copy: unknown[] | undefined
   for (const [index, message] of messages.entries()) {
-    if (!lacksId(message)) {
+    if (!isUnidentified(message)) {
       copy?.push(message)
       continue
     }
     copy ??= messages.slice(0, index)
-    copy.push({ ...(message as object), id: MINTED_ID_PREFIX + randomUUID() })
+    copy.push(completed(message as object))
   }
   return copy
 }
